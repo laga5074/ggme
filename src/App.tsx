@@ -21,6 +21,7 @@ if (words.length >= 5) {
       break;
     }
   }
+}
 
 // Fix the titles variable type issue by providing an explicit type
 // Update line 870 to include type annotation:
