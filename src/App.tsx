@@ -489,6 +489,11 @@ function App() {
         });
     }
   };
+
+  // Helper function to combine content for High difficulty
+  const combineContent = (firstHalf: string, secondHalf: string): string => {
+    return firstHalf + '\n\n' + secondHalf;
+  };
   
   const handleGenerate = async () => {
     if (!recipeTitle || !focusKeyword) {
@@ -2105,7 +2110,7 @@ OUTPUT FORMAT:
       // Make sure to restore editor state even if there's an error
       if (editor) editor.setEditable(false);
     }
-  }
+  };
 
   // Function to handle compressing individual blog images to WebP
   const handleCompressWebP = async (imageUrl: string, imageType: string) => {
@@ -3020,3 +3025,33 @@ OUTPUT FORMAT:
                         {models.map((model) => (
                           <option key={model.id} value={model.id}>
                             {model.name || model.id}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    
+                    <div className="model-group">
+                      <label>Secondary Model (DeepSeek):</label>
+                      <select
+                        value={selectedModel2}
+                        onChange={(e) => setSelectedModel2(e.target.value)}
+                      >
+                        {deepSeekModels.map((model) => (
+                          <option key={model.id} value={model.id}>
+                            {model.name || model.id}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default App;
