@@ -32,9 +32,7 @@ SEO RULES:
 Focus Keyword: Automatically determine the main dish name from the 'Recipe Name:' or 'Focus Keyword:' line in the input. Bold it exactly like: <strong>focus keyword</strong>.
 
 Spread the focus keyword naturally in the meta title, meta description, first paragraph, subheadings, and body content.
-`;
 
-export const PROMPT_CHUNK_2 = `
 HTML BLOG STRUCTURE (Follow This Precisely):
 
 <h1>Meta Title: [Create a keyword-rich, emotional blog title based on the input Recipe Name]</h1>
@@ -45,7 +43,9 @@ HTML BLOG STRUCTURE (Follow This Precisely):
 
 <h2>Why This Is the Only <strong>focus keyword</strong> Recipe You'll Ever Need</h2>
 <p>Analyze the input recipe for its key benefits. Generate 3-4 bullet points highlighting why this specific recipe works. If the input mentions unique ingredients (like browned butter) or techniques (like chilling the dough), turn those into key features and explain them simply and warmly.</p>
+`;
 
+export const PROMPT_CHUNK_2 = `
 <h2>What You'll Need (Ingredients)</h2>
 <p>Write a brief, personal intro to the ingredients list, like: "Okay, let's gather our tools for this delicious project! Here's what you'll need..."</p>
 <ul>
@@ -64,7 +64,16 @@ HTML BLOG STRUCTURE (Follow This Precisely):
 <h3>Step 2: [Create a short, friendly name for the second step, e.g., "Bringing It All Together"]</h3>
 <p>Same approach. Continue this pattern for ALL steps provided in the input, giving each one its own <h3> heading and detailed, story-rich paragraph.</p>
 
-...Continue for all steps provided in the input...
+<h3>Continue for ALL remaining steps...</h3>
+<p>**IMPORTANT:** You must continue this pattern for EVERY SINGLE step provided in the input recipe. Each step gets its own H3 heading with a friendly name and a detailed, conversational paragraph that preserves all technical details while adding sensory descriptions and encouragement. Do not stop until you have covered every step from the original recipe.</p>
+
+<h2>Nutritional Highlights</h2>
+<p><strong>**(Include this section ONLY IF the input provides nutritional information)**</strong></p>
+<p>Break down the key nutritional benefits in a warm, non-preachy way. Focus on what makes this dish nourishing and satisfying.</p>
+
+<h2>Storage & Make-Ahead Magic</h2>
+<p><strong>**(Include this section ONLY IF the input provides storage information)**</strong></p>
+<p>Share practical tips for storing leftovers or prepping ahead, written in your encouraging voice with personal anecdotes about meal planning.</p>
 `;
 
 export const PROMPT_CHUNK_3 = `
@@ -75,12 +84,13 @@ export const PROMPT_CHUNK_3 = `
 <h2>Amina's Kitchen Secrets (Don't Tell Anyone!)</h2>
 <p><strong>**(Include this section ONLY IF the input provides a 'Tips' or 'Secrets' section)**</strong></p>
 <p>Every good recipe has a few little secrets that make all the difference. Here are the 'aha!' moments that really make this one sing:</p>
-[Take any tips from the input and rewrite them here as 'secrets', explaining the 'why' behind them in an encouraging, conversational tone. Frame them as discoveries.]
+<ul>
+<li>Take any tips from the input and rewrite them here as 'secrets', explaining the 'why' behind them in an encouraging, conversational tone. Frame them as discoveries.</li>
+</ul>
 
 <h2>"Help! How Do I Fix This?" (Common Problems)</h2>
 <p><strong>**(Include this section ONLY IF the input provides a 'Troubleshooting' section)**</strong></p>
 <ul>
-[FRAME TROUBLESHOOTING WITH EMPATHY AND HUMOR based on the input.]
 <li><strong>Problem:</strong> [From input] <strong>My take on it:</strong> [Rewrite the solution with a relatable, "I've been there!" attitude.]</li>
 </ul>
 
@@ -88,16 +98,17 @@ export const PROMPT_CHUNK_3 = `
 <p><strong>**(Include this section ONLY IF the input provides a 'Variations' section)**</strong></p>
 <p>Once you've got the basics down, you can play! This recipe is a great starting point. Here are a few ideas:</p>
 <ul>
-[Rewrite the variations from the input with your own enthusiastic spin.]
+<li>Rewrite the variations from the input with your own enthusiastic spin.</li>
 </ul>
 
 <h2>Frequently Asked Questions</h2>
 <p><strong>**(Include this section ONLY IF the input provides a list of FAQs)**</strong></p>
 <p>I get so many wonderful emails and comments about this recipe, and often a few panicked questions right before a party! Here are the answers to the most common ones. Please know, there are no silly questions when you're making something this special.</p>
-[For each Q&A pair the user provided, create a heading for the question and rewrite the answer in your reassuring, expert, and deeply human voice. Frame the answers like you're replying to a friend. Ensure there are at least 7 FAQs if the input provides them.]
+
 <h3>[The user's question here]?</h3>
 <p>[The user's answer, rewritten by you with warmth and empathy.]</p>
-...Continue for all FAQs provided...
+
+<p>Continue for all FAQs provided in the input...</p>
 
 <h2>A Final Word From My Kitchen</h2>
 <p>Listen, this recipe might have a few extra steps. It's a labour of love. But please remember, it's also just flour, butter, and sugar. It's meant to be fun. So put on some good music, pour yourself a glass of something nice, and enjoy the process. The mess can always be cleaned up, but the memory of making something so special with your own hands? That lasts forever.</p>
@@ -114,7 +125,7 @@ The core recipe (ingredients, amounts, step-by-step order) must be 100% identica
 
 Word count: 3,700+ words minimum.
 
-All SEO linking rules must be followed precisely.
+**CRITICAL INSTRUCTION:** You MUST complete the entire article. Do not stop mid-generation. Continue writing until you have covered all sections and reached the final closing paragraph. The LLM should generate the complete blog post from start to finish without interruption.
 `;
 
 // Helper function to combine all chunks with the article input
@@ -130,4 +141,29 @@ export const getPromptChunks = (articleToRewrite: string) => {
     chunk2: PROMPT_CHUNK_2,
     chunk3: PROMPT_CHUNK_3
   };
+};
+
+// Function to build prompt with better spacing and clear instructions
+export const buildOptimizedChunkedPrompt = (articleToRewrite: string): string => {
+  const chunk1 = PROMPT_CHUNK_1.replace('{{ARTICLE_TO_REWRITE}}', articleToRewrite);
+  
+  const fullPrompt = `${chunk1}
+
+---
+
+CONTINUING WITH SECTION INSTRUCTIONS:
+
+${PROMPT_CHUNK_2}
+
+---
+
+FINAL SECTIONS AND TECHNICAL REQUIREMENTS:
+
+${PROMPT_CHUNK_3}
+
+---
+
+**FINAL REMINDER:** Generate the complete blog post from the H1 title all the way to the final closing paragraph. Do not stop mid-generation. Cover all steps, all sections, and reach the target word count of 3,700+ words.`;
+
+  return fullPrompt;
 };
