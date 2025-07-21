@@ -15,6 +15,7 @@ import { STEP_5_PROMPT_TEMPLATE } from './step5Prompt'; // High (Added)
 import { RECIPE_ARTICLE_PROMPT_TEMPLATE } from './recipeArticlePrompt'; // Recipe Article Flow 1
 import { RECIPE_ARTICLE_FLOW2_PROMPT_TEMPLATE } from './recipeArticleFlow2Prompt'; // Recipe Article Flow 2
 import { ImagePlacer } from './components/ImagePlacer';
+import { PROMPT_CHUNK_1, PROMPT_CHUNK_2, PROMPT_CHUNK_3, buildChunkedPrompt } from './recipeRewritePromptChunked';
 import './App.css'; // We'll add styles later
 import { generateImage as generateAIImage } from './services/imageGenerator';
 import { generateImagePrompts } from './services/imagePromptGenerator';
@@ -343,7 +344,7 @@ function App() {
     const context = blogContent.substring(0, 1500); // Slightly less context might be needed
     const titleToUse = selectedTitle || generatedTitles[0]?.text || recipeTitle; // Use selected/first generated/original title
 
-    const prompt = `Act as a professional food copywriter and SEO expert.\nYour job is to write a single SEO-optimized meta description of no more than 140 characters for a recipe blog post.\nFollow these strict rules:\nStart with the exact focus keyword (no delay)Focus Keyword: "${focusKeyword}",.\nMust sound 100% natural, human, emotional, and useful.\nInclude a subtle benefit, unique hook, or use-case (e.g., quick dinner, freezer-friendly, 1-pot, 5-min prep, etc.).\nUse a natural call to action if space allows (like “Make it tonight”, “Try it now”, “Save this one”, “Get the recipe”).\nAvoid generic fluff like “tasty” or “yummy” unless part of a real phrase that would be spoken by a food blogger.\nNo AI-sounding terms like “easy to make”, “delicious recipe” unless rewritten into conversational tone.\nNever exceed 140 characters — short, scroll-stopping, and mobile-friendly. Output *only* the descriptions, each on a new line, with no extra text, numbering, or quotes\n\nBlog Post Context:\n---\n${context}\n---`;
+    const prompt = `Act as a professional food copywriter and SEO expert.\nYour job is to write a single SEO-optimized meta description of no more than 140 characters for a recipe blog post.\nFollow these strict rules:\nStart with the exact focus keyword (no delay)Focus Keyword: "${focusKeyword}",.\nMust sound 100% natural, human, emotional, and useful.\nInclude a subtle benefit, unique hook, or use-case (e.g., quick dinner, freezer-friendly, 1-pot, 5-min prep, etc.).\nUse a natural call to action if space allows (like "Make it tonight", "Try it now", "Save this one", "Get the recipe").\nAvoid generic fluff like "tasty" or "yummy" unless part of a real phrase that would be spoken by a food blogger.\nNo AI-sounding terms like "easy to make", "delicious recipe" unless rewritten into conversational tone.\nNever exceed 140 characters — short, scroll-stopping, and mobile-friendly. Output *only* the descriptions, each on a new line, with no extra text, numbering, or quotes\n\nBlog Post Context:\n---\n${context}\n---`;
 
     try {
         console.log("Generating initial meta descriptions using model:", selectedModel2); // Use selectedModel2
@@ -378,7 +379,7 @@ function App() {
     const titleToUse = selectedTitle || generatedTitles[0]?.text || recipeTitle;
     const existingDescriptions = generatedMetaDescriptions.map(d => `- ${d}`).join('\n');
 
-    const prompt = `Act as a professional food copywriter and SEO expert.\nYour job is to write a single SEO-optimized meta description of no more than 140 characters for a recipe blog post.\nFollow these strict rules:\nStart with the exact focus keyword (no delay)Focus Keyword: "${focusKeyword}",.\nMust sound 100% natural, human, emotional, and useful.\nInclude a subtle benefit, unique hook, or use-case (e.g., quick dinner, freezer-friendly, 1-pot, 5-min prep, etc.).\nUse a natural call to action if space allows (like “Make it tonight”, “Try it now”, “Save this one”, “Get the recipe”).\nAvoid generic fluff like “tasty” or “yummy” unless part of a real phrase that would be spoken by a food blogger.\nNo AI-sounding terms like “easy to make”, “delicious recipe” unless rewritten into conversational tone.\nNever exceed 140 characters — short, scroll-stopping, and mobile-friendly. Output *only* the descriptions, each on a new line, with no extra text, numbering, or quotes\n\nExisting Meta Descriptions:\n${existingDescriptions}\n\nBlog Post Context:\n---\n${context}\n---`;
+    const prompt = `Act as a professional food copywriter and SEO expert.\nYour job is to write a single SEO-optimized meta description of no more than 140 characters for a recipe blog post.\nFollow these strict rules:\nStart with the exact focus keyword (no delay)Focus Keyword: "${focusKeyword}",.\nMust sound 100% natural, human, emotional, and useful.\nInclude a subtle benefit, unique hook, or use-case (e.g., quick dinner, freezer-friendly, 1-pot, 5-min prep, etc.).\nUse a natural call to action if space allows (like "Make it tonight", "Try it now", "Save this one", "Get the recipe").\nAvoid generic fluff like "tasty" or "yummy" unless part of a real phrase that would be spoken by a food blogger.\nNo AI-sounding terms like "easy to make", "delicious recipe" unless rewritten into conversational tone.\nNever exceed 140 characters — short, scroll-stopping, and mobile-friendly. Output *only* the descriptions, each on a new line, with no extra text, numbering, or quotes\n\nExisting Meta Descriptions:\n${existingDescriptions}\n\nBlog Post Context:\n---\n${context}\n---`;
 
      try {
         console.log("Generating additional meta description using model:", selectedModel2); // Use selectedModel2
@@ -573,7 +574,18 @@ function App() {
                 .replace(/\${FOCUS_KEYWORD}/g, focusKeyword);
         } else if (difficulty === 'hard') {
             console.log("Using hard difficulty with RECIPE_REWRITE_PROMPT");
-            step2Prompt = RECIPE_REWRITE_PROMPT.replace('{{ARTICLE_TO_REWRITE}}', articleToRewrite || '');
+            let prompt: string;
+            
+            if (difficulty === 'Hard') {
+              // Use chunked prompt for Hard difficulty to avoid token overload
+              prompt = buildChunkedPrompt(articleToRewrite);
+              console.log('Using chunked prompt for Hard difficulty');
+            } else {
+              // Use original prompt for Easy/Medium difficulty
+              prompt = RECIPE_REWRITE_PROMPT.replace('{{ARTICLE_TO_REWRITE}}', articleToRewrite || '');
+            }
+            
+            step2Prompt = prompt;
 
         } else if (difficulty === 'master') {
             console.log("Using master difficulty with STEP_4_MASTER_PROMPT_TEMPLATE");
@@ -608,7 +620,7 @@ TASK:
 WRITE:
 - A warm, vivid blog-style introduction like you're sharing the recipe with a close friend or family member
 - A strong, keyword-optimized <h1> meta title using the **{{FOCUS_KEYWORD}}**
-- A short personal anecdote, origin story, or “how I discovered this” moment
+- A short personal anecdote, origin story, or "how I discovered this" moment
 - Meta info block (prep time, cook time, total time, yield, difficulty)
 - A simple <h2>Ingredients:</h2> section
   - Use a single <p> tag with line breaks (<br>) between items
@@ -656,7 +668,7 @@ TASK:
   - <h2>Flavor Boosts & Fixes</h2>
   - <h2>Storage & Reheating Tips</h2>
   - <h2>FAQs</h2>
-  - <h2>Final Thoughts</h2> or <h2>Why I’ll Keep Making This</h2>
+  - <h2>Final Thoughts</h2> or <h2>Why I'll Keep Making This</h2>
 - Conclude with a heartfelt reflection or tip (not a summary)
 - Maintain consistent, sensory-rich, helpful tone
 
@@ -679,7 +691,7 @@ TASK:
 ⚠️ RULES:
 - DO NOT repeat intro, ingredient list, or steps from the first half
 - DO NOT invent new instructions or ingredients
-- DO NOT use markdown, JSON, or any “part” labels
+- DO NOT use markdown, JSON, or any "part" labels
 
 OUTPUT FORMAT:
 <!-- Continue in valid HTML only: <h2>, <h3>, <p>, <br>, etc.
@@ -2095,6 +2107,22 @@ OUTPUT FORMAT:
     }
   }
 
+  // Function to handle compressing individual blog images to WebP
+  const handleCompressWebP = async (imageUrl: string, imageType: string) => {
+    setConvertingBlogImages(prev => ({ ...prev, [imageType]: true }));
+    
+    try {
+      const webpUrl = await convertImageToWebP(imageUrl);
+      setBlogImages(prev => ({ ...prev, [imageType]: webpUrl }));
+      setSuccessMessage(`${imageType} image converted to WebP successfully!`);
+    } catch (error) {
+      console.error(`Error converting ${imageType} image to WebP:`, error);
+      setBlogImageError(`Failed to convert ${imageType} image to WebP: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setConvertingBlogImages(prev => ({ ...prev, [imageType]: false }));
+    }
+  };
+
   // Return the JSX for the App component
   return (
     <div className="app-container">
@@ -3073,23 +3101,6 @@ const insertExternalLinksIntoEditor = async (editor: any, links: string[]) => {
           `<a href="${links.length >= 2 ? links[1] : links[0]}" target="_blank" rel="noopener">${anchorText}</a>`
         );
         
-// Helper to combine two HTML/XML blocks
-function combineContent(first: string, second: string): string {
-    // Clean up the content by removing any part headers
-    const cleanFirst = first
-        .replace(/<h2[^>]*>Part 1: [^<]*<\/h2>/i, '')
-        .replace(/<h2[^>]*>Part 1[^<]*<\/h2>/i, '')
-        .trim();
-    
-    const cleanSecond = second
-        .replace(/<h2[^>]*>Part 2: [^<]*<\/h2>/i, '')
-        .replace(/<h2[^>]*>Part 2[^<]*<\/h2>/i, '')
-        .trim();
-
-    // Combine the parts with a simple separator
-    return `${cleanFirst}\n\n${cleanSecond}`;
-}
-
         // Replace the paragraph in the editor
         editor.commands.setContent(
           editor.getHTML().replace(secondLinkTarget, `<p>${newText}</p>`)
@@ -3113,15 +3124,19 @@ function extractXML(text: string, tag: string): string {
 
 // Helper to combine two HTML/XML blocks
 function combineContent(first: string, second: string): string {
-    // Wrap both parts in a container to ensure TipTap renders both
-    return `<div class="blog-part1">
+    // Clean up the content by removing any part headers
+    const cleanFirst = first
+        .replace(/<h2[^>]*>Part 1: [^<]*<\/h2>/i, '')
+        .replace(/<h2[^>]*>Part 1[^<]*<\/h2>/i, '')
+        .trim();
+    
+    const cleanSecond = second
+        .replace(/<h2[^>]*>Part 2: [^<]*<\/h2>/i, '')
+        .replace(/<h2[^>]*>Part 2[^<]*<\/h2>/i, '')
+        .trim();
 
-${first}
-</div>
-<div class="blog-part2">
-
-${second}
-</div>`;
+    // Combine the parts with a simple separator
+    return `${cleanFirst}\n\n${cleanSecond}`;
 }
 
 export default App;
