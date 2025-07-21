@@ -24,11 +24,11 @@ Keyword Research & Clustering:
 
 Title Tag & Meta Description:
 - Create an SEO-optimized title tag (≤60 characters) starting with or prominently featuring the \${USER_INPUT_FOCUS_KEYWORD}. Make it enticing for a recipe searcher.
-- Write a compelling meta description (120–155 characters) including the \${USER_INPUT_FOCUS_KEYWORD} or a strong secondary keyword, highlighting a key benefit (e.g., "easy," "authentic," "best") and including a clear call-to-action (e.g., "Get the recipe!"). (Output these directly as labeled text)
+Act as a professional food copywriter and SEO expert.\nYour job is to write a single SEO-optimized meta description of no more than 140 characters for a recipe blog post.\nFollow these strict rules:\nStart with the exact focus keyword (no delay)Focus Keyword: "\${USER_INPUT_FOCUS_KEYWORD}",.\nMust sound 100% natural, human, emotional, and useful.\nInclude a subtle benefit, unique hook, or use-case (e.g., quick dinner, freezer-friendly, 1-pot, 5-min prep, etc.).\nUse a natural call to action if space allows (like “Make it tonight”, “Try it now”, “Save this one”, “Get the recipe”).\nAvoid generic fluff like “tasty” or “yummy” unless part of a real phrase that would be spoken by a food blogger.\nNo AI-sounding terms like “easy to make”, “delicious recipe” unless rewritten into conversational tone.\nNever exceed 140 characters — short, scroll-stopping, and mobile-friendly. Output *only* the descriptions, each on a new line, with no extra text, numbering, or quotes
 
 SEO Suggestions:
 - Title Suggestions: generate exactly two compelling, SEO-friendly title suggestions. Output *only* the titles, each on a new line, with no extra text, numbering, or quotes.
-- Meta Description Suggestions: generate exactly two concise, SEO-friendly meta descriptions (max 160 characters each). Output *only* the descriptions, each on a new line, with no extra text, numbering, or quotes.
+Act as a professional food copywriter and SEO expert.\nYour job is to write a single SEO-optimized meta description of no more than 140 characters for a recipe blog post.\nFollow these strict rules:\nStart with the exact focus keyword (no delay)Focus Keyword: "\${USER_INPUT_FOCUS_KEYWORD}",.\nMust sound 100% natural, human, emotional, and useful.\nInclude a subtle benefit, unique hook, or use-case (e.g., quick dinner, freezer-friendly, 1-pot, 5-min prep, etc.).\nUse a natural call to action if space allows (like “Make it tonight”, “Try it now”, “Save this one”, “Get the recipe”).\nAvoid generic fluff like “tasty” or “yummy” unless part of a real phrase that would be spoken by a food blogger.\nNo AI-sounding terms like “easy to make”, “delicious recipe” unless rewritten into conversational tone.\nNever exceed 140 characters — short, scroll-stopping, and mobile-friendly. Output *only* the descriptions, each on a new line, with no extra text, numbering, or quotes
 - SEO Keywords: extract 5–10 most relevant SEO keywords related to \${USER_INPUT_RECIPE_TITLE}. Output as a comma-separated list of keywords with no extra text.
 
 Detailed Outline Creation:
@@ -60,13 +60,6 @@ Structure & Formatting:
 - Use descriptive H2/H3 headings containing keywords naturally where appropriate.
 - After each H2 heading in the outline, include placeholders for the next stage (Flow 2):
   <!-- Image Suggestion: [Brief descriptive alt text suggestion relevant to the section] -->
-  <!-- External Reference Suggestion: [Optional: Note potential authoritative source type or topic, e.g., "Link to USDA meat temp guide", "Link to history of dish"] -->
-
-**External Links to Use**:
-- Capture the **external link suggestions** to be saved and used in Flow 3. Provide a list of 2-3 relevant external links that can later be added to the article.
-- Example of Output:
-  - External Link 1: [URL]
-  - External Link 2: [URL]
 
 Output this outline directly using H2/H3 structure.
 

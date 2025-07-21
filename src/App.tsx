@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Image from '@tiptap/extension-image';
@@ -9,12 +9,11 @@ import Underline from '@tiptap/extension-underline';
 import axios from 'axios';
 import { STEP_1_PROMPT_TEMPLATE } from './step1Prompt';
 import { STEP_2_PROMPT_TEMPLATE } from './step2Prompt'; // Medium
-import { STEP_3_PROMPT_TEMPLATE } from './step3Prompt'; // Hard
+import { RECIPE_REWRITE_PROMPT } from './recipeRewritePrompt'; // Hard
 import { STEP_4_MASTER_PROMPT_TEMPLATE } from './step4MasterPrompt'; // Master
 import { STEP_5_PROMPT_TEMPLATE } from './step5Prompt'; // High (Added)
 import { RECIPE_ARTICLE_PROMPT_TEMPLATE } from './recipeArticlePrompt'; // Recipe Article Flow 1
 import { RECIPE_ARTICLE_FLOW2_PROMPT_TEMPLATE } from './recipeArticleFlow2Prompt'; // Recipe Article Flow 2
-import { FLOW3_EXTERNAL_LINK_INSERTION_PROMPT } from './flow3ExternalLinkPrompt'; // Flow 3 for external links
 import { ImagePlacer } from './components/ImagePlacer';
 import './App.css'; // We'll add styles later
 import { generateImage as generateAIImage } from './services/imageGenerator';
@@ -22,6 +21,29 @@ import { generateImagePrompts } from './services/imagePromptGenerator';
 
 // Shared alt text prompt template to ensure consistency
 export const SHARED_ALT_TEXT_PROMPT = `Write a concise, SEO-optimized alt text (max 125 characters) for a recipe image. Include the focus keyword: '{focusKeyword}'. Describe the visual elements of the dish, including presentation, ingredients, and serving style. Focus on what someone would see in the photo and what would make it appealing to both users and search engines.`;
+
+// Prompt for generating WordPress image titles
+export const IMAGE_TITLE_PROMPT = `You are a content assistant for WordPress images.
+
+Input: A blog post title (e.g., "Barbie Cake Recipe")
+
+Goal: Write a human-readable image title for WordPress, used in the media library "Title" field. The title should:
+- Be clear and natural, like a short headline
+- Contain relevant SEO keywords from the input
+- Be properly capitalized (title case)
+- Avoid hyphens, AI phrases, or unnatural formatting
+- Be easy to understand for humans and screen readers
+- Not exceed about 70 characters
+
+Output:
+A single sentence-style or headline-style image title, no extra text.
+
+Example output:
+Barbie Cake Recipe with Pink Buttercream Frosting
+
+Input: "{recipeTitle}"
+
+Output:`;
 
 // Function to get the blog post content from the editor
 export function getBlogPostContent(editor: any): string {
@@ -114,6 +136,18 @@ function App() {
     leonardoAi: ''
   });
   
+  // Handler for API key changes
+  const handleApiKeyChange = (key: keyof ApiKeys, value: string) => {
+    const updatedKeys = {
+      ...apiKeys,
+      [key]: value
+    };
+    setApiKeys(updatedKeys);
+    
+    // Save to localStorage
+    localStorage.setItem('apiKeys', JSON.stringify(updatedKeys));
+  };
+
   // State for image generation
   const [isGeneratingBlogImages, setIsGeneratingBlogImages] = useState<boolean>(false);
   const [blogImageError, setBlogImageError] = useState<string | null>(null);
@@ -132,15 +166,21 @@ function App() {
   const [selectedModel2, setSelectedModel2] = useState<string>(deepSeekModels[0]?.id || ''); // Default to first DeepSeek model or empty if none
   const [recipeTitle, setRecipeTitle] = useState<string>('');
   const [difficulty, setDifficulty] = useState<string>('medium'); // Default to medium
+  const [articleToRewrite, setArticleToRewrite] = useState<string>(''); // For Hard rewrite
   const [focusKeyword, setFocusKeyword] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false); // Loading state for main generation
-  const [isInsertingLinks, setIsInsertingLinks] = useState<boolean>(false); // Loading state for external link insertion
   const [error, setError] = useState<string | null>(null);
   const [isSidebarContentVisible, setIsSidebarContentVisible] = useState<boolean>(false); // Controls sidebar section visibility
   const [generatedTitles, setGeneratedTitles] = useState<{ text: string; score: number }[]>([]);
   const [selectedTitle, setSelectedTitle] = useState<string | null>(null);
   const [generatedMetaDescriptions, setGeneratedMetaDescriptions] = useState<string[]>([]);
   const [selectedMetaDescription, setSelectedMetaDescription] = useState<string | null>(null);
+  // Auto-select the first meta description when they are generated and none is selected yet
+  useEffect(() => {
+    if (generatedMetaDescriptions.length > 0 && !selectedMetaDescription) {
+      setSelectedMetaDescription(generatedMetaDescriptions[0]);
+    }
+  }, [generatedMetaDescriptions, selectedMetaDescription]);
   const [extractedKeywords, setExtractedKeywords] = useState<string[]>([]);
   const [isGeneratingSidebarContent, setIsGeneratingSidebarContent] = useState<boolean>(false); // Loading state for sidebar tasks
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
@@ -154,6 +194,7 @@ function App() {
   const [conversionStep, setConversionStep] = useState<string>('');
   const [conversionProgress, setConversionProgress] = useState<number>(0);
   const [originalImageUrl, setOriginalImageUrl] = useState<string | null>(null);
+  const [isWebP, setIsWebP] = useState<boolean>(false);
   
   // WordPress connection states
   const [wordpressSettings, setWordpressSettings] = useState<WordPressSettings>({
@@ -302,20 +343,17 @@ function App() {
     const context = blogContent.substring(0, 1500); // Slightly less context might be needed
     const titleToUse = selectedTitle || generatedTitles[0]?.text || recipeTitle; // Use selected/first generated/original title
 
-    const prompt = `Based on the following blog post content about "${titleToUse}" with focus keyword "${focusKeyword}", generate exactly two concise and compelling SEO-friendly meta descriptions (max 160 characters each). Output *only* the descriptions, each on a new line, with no extra text, numbering, or quotes.
-
-Blog Post Context:
----
-${context}
----
-
-Meta Descriptions:`;
+    const prompt = `Act as a professional food copywriter and SEO expert.\nYour job is to write a single SEO-optimized meta description of no more than 140 characters for a recipe blog post.\nFollow these strict rules:\nStart with the exact focus keyword (no delay)Focus Keyword: "${focusKeyword}",.\nMust sound 100% natural, human, emotional, and useful.\nInclude a subtle benefit, unique hook, or use-case (e.g., quick dinner, freezer-friendly, 1-pot, 5-min prep, etc.).\nUse a natural call to action if space allows (like “Make it tonight”, “Try it now”, “Save this one”, “Get the recipe”).\nAvoid generic fluff like “tasty” or “yummy” unless part of a real phrase that would be spoken by a food blogger.\nNo AI-sounding terms like “easy to make”, “delicious recipe” unless rewritten into conversational tone.\nNever exceed 140 characters — short, scroll-stopping, and mobile-friendly. Output *only* the descriptions, each on a new line, with no extra text, numbering, or quotes\n\nBlog Post Context:\n---\n${context}\n---`;
 
     try {
         console.log("Generating initial meta descriptions using model:", selectedModel2); // Use selectedModel2
         const response = await callApiModel(prompt, selectedModel2, apiKeys); // Use selectedModel2
         const descriptions = response.split('\n').map(d => d.trim()).filter(d => d.length > 0 && d.length <= 160); // Filter by length
-        setGeneratedMetaDescriptions(descriptions.slice(0, 2));
+        const firstTwo = descriptions.slice(0, 2);
+        setGeneratedMetaDescriptions(firstTwo);
+        if (firstTwo.length > 0) {
+          setSelectedMetaDescription(firstTwo[0]);
+        }
         console.log("Generated meta descriptions:", descriptions);
     } catch (err: any) {
         console.error("Error generating meta descriptions:", err);
@@ -340,18 +378,7 @@ Meta Descriptions:`;
     const titleToUse = selectedTitle || generatedTitles[0]?.text || recipeTitle;
     const existingDescriptions = generatedMetaDescriptions.map(d => `- ${d}`).join('\n');
 
-    const prompt = `Based on the following blog post content about "${titleToUse}" with focus keyword "${focusKeyword}", generate one more concise and compelling SEO-friendly meta description (max 160 characters) that is distinct from the existing ones provided below. Output *only* the new description on a single line, with no extra text, numbering, or quotes.
-
-Blog Post Context:
----
-${context}
----
-
-Existing Descriptions (do not repeat):
-${existingDescriptions}
----
-
-New Meta Description:`;
+    const prompt = `Act as a professional food copywriter and SEO expert.\nYour job is to write a single SEO-optimized meta description of no more than 140 characters for a recipe blog post.\nFollow these strict rules:\nStart with the exact focus keyword (no delay)Focus Keyword: "${focusKeyword}",.\nMust sound 100% natural, human, emotional, and useful.\nInclude a subtle benefit, unique hook, or use-case (e.g., quick dinner, freezer-friendly, 1-pot, 5-min prep, etc.).\nUse a natural call to action if space allows (like “Make it tonight”, “Try it now”, “Save this one”, “Get the recipe”).\nAvoid generic fluff like “tasty” or “yummy” unless part of a real phrase that would be spoken by a food blogger.\nNo AI-sounding terms like “easy to make”, “delicious recipe” unless rewritten into conversational tone.\nNever exceed 140 characters — short, scroll-stopping, and mobile-friendly. Output *only* the descriptions, each on a new line, with no extra text, numbering, or quotes\n\nExisting Meta Descriptions:\n${existingDescriptions}\n\nBlog Post Context:\n---\n${context}\n---`;
 
      try {
         console.log("Generating additional meta description using model:", selectedModel2); // Use selectedModel2
@@ -462,294 +489,6 @@ New Meta Description:`;
     }
   };
   
-  // Function to handle external link insertion using Flow 3
-  const handleInsertExternalLinks = async () => {
-    // Check for editor and prevent duplicate operations
-    if (!editor) {
-      setError('No content available to insert links into.');
-      return;
-    }
-
-    if (isInsertingLinks) {
-      setError('Already inserting links, please wait...');
-      return;
-    }
-
-    setIsInsertingLinks(true);
-    setError('');
-
-    // Define default links once at the beginning of the function
-    const defaultLinks = [
-      'https://www.seriouseats.com/cooking-techniques',
-      'https://www.foodnetwork.com/recipes'
-    ];
-
-    // Link validation function
-    const safeLink = (link: string): string => {
-      if (!link) return defaultLinks[0];
-      
-      // Clean the URL by removing trailing parentheses and slashes
-      let cleanLink = link.trim();
-      
-      // Remove trailing parenthesis patterns like ")/" or ")" at the end of URLs
-      cleanLink = cleanLink.replace(/\)[/]*$/, '');
-      
-      // Also remove any other common problematic characters at the end
-      cleanLink = cleanLink.replace(/[.,;:!?'")]$/, '');
-      
-      try {
-        const url = new URL(cleanLink);
-        return url.protocol.startsWith('http') ? cleanLink : defaultLinks[0];
-      } catch {
-        // If there's a closing parenthesis inside the URL, try to be smarter
-        if (cleanLink.includes(')') && !cleanLink.includes('(')) {
-          // Remove everything from the first closing parenthesis
-          cleanLink = cleanLink.split(')')[0];
-          try {
-            const url = new URL(cleanLink);
-            return url.protocol.startsWith('http') ? cleanLink : defaultLinks[0];
-          } catch {
-            return defaultLinks[0];
-          }
-        }
-        return defaultLinks[0];
-      }
-    };
-
-    // Get safe links using validation function
-    const firstLink = safeLink(externalLinks[0]);
-    const secondLink = safeLink(externalLinks[1]) || firstLink;
-    
-    console.log('Using validated links:', { firstLink, secondLink });
-
-    // Get current content from the editor - do this only once
-    const originalContent = editor.getHTML();
-    console.log('Original content length:', originalContent.length);
-
-    try {
-      // Show loading indicator
-      editor.commands.setContent('<p>Adding external links to the article...</p>');
-      console.log('Using Flow 3 to insert external links');
-
-      // Prepare the Flow 3 prompt with the content and focus keyword
-      let flow3Prompt = FLOW3_EXTERNAL_LINK_INSERTION_PROMPT
-        .replace(/{{FLOW2_ARTICLE_CONTENT}}/g, originalContent)
-        .replace(/{{USER_INPUT_FOCUS_KEYWORD}}/g, focusKeyword);
-
-      console.log('Preparing to insert automatic external links for recipe:', focusKeyword);
-
-      try {
-        // Make the API call to insert the external link
-        const response = await axios.post(
-          'https://openrouter.ai/api/v1/chat/completions',
-          {
-            model: selectedModel1,
-            messages: [
-              { role: 'system', content: 'You are a helpful assistant.' },
-              { role: 'user', content: flow3Prompt }
-            ],
-            max_tokens: 4000
-          },
-          {
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${apiKeys.openRouter}`
-            }
-          }
-        );
-
-        // Extract the AI response
-        const aiResponse = response.data.choices[0].message.content;
-        console.log('AI response received, length:', aiResponse.length);
-
-        // Update the editor with the AI-enhanced content
-        editor.commands.setContent(aiResponse);
-        setError('External links inserted successfully!');
-        setIsInsertingLinks(false);
-        return;
-      } catch (aiError) {
-        console.error('Error in AI link insertion:', aiError);
-        console.log('Falling back to direct link insertion method');
-        throw new Error('AI approach failed, falling back to direct insertion');
-      }
-    } catch (linkError) {
-      console.error('Error in Flow 3 external link insertion:', linkError);
-      setError(`Error inserting external link: ${linkError instanceof Error ? linkError.message : 'Unknown error'}`);
-
-      // If Flow 3 fails, fall back to direct insertion method
-      try {
-        console.log('Falling back to direct link insertion method');
-        // Reset to the original content
-        editor.commands.setContent(originalContent);
-        console.log('Reset to original content, length:', originalContent.length);
-
-        // Directly insert link into a paragraph
-        console.log('Original content for regex:', originalContent.substring(0, 200) + '...');
-
-        // Try different regex patterns to find paragraphs
-        let paragraphs = originalContent.match(/<p>[^<]+<\/p>/g) || [];
-        console.log('Found paragraphs with first pattern:', paragraphs.length);
-
-        // If no paragraphs found, try a more lenient pattern
-        if (paragraphs.length === 0) {
-          paragraphs = originalContent.match(/<p>.*?<\/p>/gs) || [];
-          console.log('Found paragraphs with second pattern:', paragraphs.length);
-        }
-
-        // If still no paragraphs, try an even more lenient pattern
-        if (paragraphs.length === 0) {
-          paragraphs = originalContent.match(/<p[^>]*>.*?<\/p>/gs) || [];
-          console.log('Found paragraphs with third pattern:', paragraphs.length);
-        }
-
-        if (paragraphs && paragraphs.length >= 1) {
-          let modifiedContent = originalContent;
-          console.log('Starting direct link insertion');
-
-          // Insert link in the first paragraph
-          const firstPara = paragraphs[0];
-          console.log('First paragraph:', firstPara);
-
-          if (firstPara) {
-            // Extract text from paragraph
-            const paraText = firstPara.replace(/<\/?p[^>]*>/g, '');
-            console.log('Paragraph text:', paraText);
-          
-            const words = paraText.split(' ');
-            console.log('Word count:', words.length);
-          
-            if (words.length >= 5) {
-              // Find a suitable anchor text that doesn't include the focus keyword
-              let anchorWords: string[] = [];
-              let startIndex = 1;
-              
-              // Avoid using the focus keyword in the anchor text
-              for (let i = 1; i < words.length - 2; i++) {
-                const potentialAnchor = words.slice(i, i + 3).join(' ').toLowerCase();
-                if (!potentialAnchor.includes(focusKeyword.toLowerCase())) {
-                  anchorWords = words.slice(i, i + 3);
-                  startIndex = i;
-                  break;
-                }
-              }
-              
-              // If no suitable anchor found, use words that are not the focus keyword
-              if (anchorWords.length === 0) {
-                // Find any words not containing the focus keyword
-                for (let i = 0; i < words.length; i++) {
-                  if (!words[i].toLowerCase().includes(focusKeyword.toLowerCase())) {
-                    anchorWords.push(words[i]);
-                    if (anchorWords.length >= 3) break;
-                  }
-                }
-              }
-              
-              // If still no suitable anchor, use default cooking terms
-              if (anchorWords.length === 0) {
-                anchorWords = ['cooking', 'techniques', 'recipe'];
-              }
-              
-              const anchorText = anchorWords.join(' ');
-              console.log('Anchor text:', anchorText);
-            
-              // Create new paragraph with link to a high-quality cooking site
-              const newPara = `<p>${paraText.replace(
-                anchorText,
-                `<a href="${firstLink}" target="_blank" rel="noopener">${anchorText}</a>`
-              )}</p>`;
-              console.log('New paragraph:', newPara);
-            
-              // Replace in content
-              modifiedContent = modifiedContent.replace(firstPara, newPara);
-              console.log('Link inserted');
-            
-              // Update the editor with the modified content
-              editor.commands.setContent(modifiedContent);
-              setError('External link inserted successfully (using direct method)!');
-              console.log('External link inserted successfully via direct method');
-              setIsInsertingLinks(false);
-              return;
-            } else {
-              console.log('Not enough words in paragraph for link insertion');
-              throw new Error('Not enough words in paragraph for link insertion');
-            }
-          } else {
-            console.log('First paragraph is undefined');
-            throw new Error('First paragraph is undefined');
-          }
-        } else {
-          console.log('Not enough paragraphs found in content');
-          
-          // GUARANTEED METHOD: Add clearly visible link with colored background
-          try {
-            console.log('Using guaranteed link insertion method');
-
-            // Create content with highly visible link, avoiding focus keyword
-            const firstLinkText = focusKeyword.toLowerCase().includes('cooking') ? 'culinary techniques' : 'cooking techniques';
-            const secondLinkText = focusKeyword.toLowerCase().includes('recipe') ? 'cooking resources' : 'recipe ideas';
-            
-            const wrappedContent = `
-              <p style="background-color: #e6f7ff; padding: 10px; border-left: 4px solid #1890ff; margin: 10px 0;">
-                <strong>🔗 Helpful Resource:</strong> Find more <a href="${firstLink}" target="_blank" rel="noopener" style="color: #1890ff; text-decoration: underline;">${firstLinkText}</a> and tips for better results.
-              </p>
-              ${originalContent}
-              <p style="background-color: #f6ffed; padding: 10px; border-left: 4px solid #52c41a; margin: 10px 0;">
-                <strong>🔗 Related Content:</strong> Discover additional <a href="${secondLink}" target="_blank" rel="noopener" style="color: #52c41a; text-decoration: underline;">${secondLinkText}</a> to enhance your cooking repertoire.
-              </p>
-            `;
-            
-            try {
-              // Force the editor to update by using innerHTML directly
-              const editorElement = document.querySelector('.tiptap-editor .ProseMirror');
-              if (editorElement) {
-                // First set content through the editor API
-                editor.commands.setContent(wrappedContent);
-                
-                // Then force update the DOM directly as a fallback
-                editorElement.innerHTML = wrappedContent;
-            }
-          } catch (domError) {
-            console.error('DOM update error:', domError);
-            // Last resort - just update through the API
-            editor.commands.setContent(wrappedContent);
-            setError('External links added (fallback method)!');
-            console.log('External links added through API fallback');
-            setIsInsertingLinks(false);
-            return;
-          }
-        } catch (guaranteedError) {
-          console.error('Guaranteed link insertion failed:', guaranteedError);
-          throw guaranteedError;
-        }
-      }
-    } catch (directError) {
-      console.error('Direct link insertion failed:', directError);
-      setError(`Direct link insertion failed: ${directError instanceof Error ? directError.message : 'Unknown error'}`);
-      
-      // Last resort - just set back to original content
-      editor.commands.setContent(originalContent);
-      setIsInsertingLinks(false);
-    }
-  } finally {
-    // Ensure we always reset the insertion flag
-    setIsInsertingLinks(false);
-  }
-};
-
-  // Simplified handler for the single API key
-  const handleApiKeyChange = (key: keyof ApiKeys, value: string) => {
-    setApiKeys(prevKeys => ({
-      ...prevKeys,
-      [key]: value
-    }));
-    // Save to localStorage
-    localStorage.setItem('apiKeys', JSON.stringify({
-      ...apiKeys,
-      [key]: value
-    }));
-  };
-
-  
   const handleGenerate = async () => {
     if (!recipeTitle || !focusKeyword) {
       setError('Please provide both a Recipe Title and a Focus Keyword.');
@@ -761,6 +500,10 @@ New Meta Description:`;
       return;
     }
     if (!selectedModel2) {
+      if (difficulty === 'hard' && !articleToRewrite.trim()) {
+        setError('Please paste the article you want to rewrite.');
+        return;
+      }
       setError('Please select a DeepSeek model for Step 2 (Writing).');
       return;
     }
@@ -829,19 +572,246 @@ New Meta Description:`;
                 .replace(/\${RECIPE_TITLE}/g, recipeTitle)
                 .replace(/\${FOCUS_KEYWORD}/g, focusKeyword);
         } else if (difficulty === 'hard') {
-            console.log("Using hard difficulty with STEP_3_PROMPT_TEMPLATE");
-            step2Prompt = STEP_3_PROMPT_TEMPLATE
-                .replace(/\[chicken pata recipe\]/g, recipeTitle);
+            console.log("Using hard difficulty with RECIPE_REWRITE_PROMPT");
+            step2Prompt = RECIPE_REWRITE_PROMPT.replace('{{ARTICLE_TO_REWRITE}}', articleToRewrite || '');
+
         } else if (difficulty === 'master') {
             console.log("Using master difficulty with STEP_4_MASTER_PROMPT_TEMPLATE");
             step2Prompt = STEP_4_MASTER_PROMPT_TEMPLATE
                 .replace(/\${OUTLINE}/g, outlineResponse)
                 .replace(/\${FOCUS_KEYWORD}/g, focusKeyword);
         } else if (difficulty === 'high') {
-            console.log("Using high difficulty with STEP_5_PROMPT_TEMPLATE");
-            step2Prompt = STEP_5_PROMPT_TEMPLATE
-                .replace(/\${RECIPE_TITLE}/g, recipeTitle)
-                .replace(/\${FOCUS_KEYWORD}/g, focusKeyword);
+            // New DeepSeek two-step prompt logic for High
+            if (!articleToRewrite.trim()) {
+                setError('Please enter the recipe info.');
+                return;
+            }
+            // Define prompts
+            const FIRST_HALF_PROMPT = `You are a professional food blogger, storytelling recipe writer, and SEO strategist. Based ONLY on the raw recipe input provided, write the **first half** of a long-form, emotionally rich, SEO-optimized recipe blog post in clean HTML.
+
+RAW INPUT RECIPE:
+{{ARTICLE_TO_REWRITE}}
+
+TASK:
+- Carefully extract only the core recipe content.
+- Ignore all unrelated or invalid data, including:
+  - Author names, bios, star ratings
+  - Buttons (print/save/share), forms, comments
+  - Ads, scripts, sidebars, or layout HTML
+- Focus on extracting and using only:
+  - Recipe name/title
+  - Prep time, cook time, total time, servings/yield, difficulty (if available)
+  - Ingredients
+  - Instructions
+  - Notes (if present)
+
+WRITE:
+- A warm, vivid blog-style introduction like you're sharing the recipe with a close friend or family member
+- A strong, keyword-optimized <h1> meta title using the **{{FOCUS_KEYWORD}}**
+- A short personal anecdote, origin story, or “how I discovered this” moment
+- Meta info block (prep time, cook time, total time, yield, difficulty)
+- A simple <h2>Ingredients:</h2> section
+  - Use a single <p> tag with line breaks (<br>) between items
+  - Do NOT use <ul>/<li> lists
+  - Use ingredients exactly as in the original, with no creative language
+- Begin the instructions section in <h2>Instructions</h2>
+  - Start rewriting in a friendly, sensory, human tone (describe smell, texture, common mistakes)
+  - Use casual, helpful, vivid descriptions
+  - STOP writing at approximately halfway through the instructions
+
+✅ SEO RULES:
+- Use the main focus keyword: **{{FOCUS_KEYWORD}}** in:
+  - <h1> title
+  - First 100 words
+  - At least one subheading
+- Internally link the focus keyword like:
+  <a href=" internal-link " target="_blank"><strong>{{FOCUS_KEYWORD}}</strong></a>
+- Optionally include 1–2 of these related keywords if natural: {{RELATED_KEYWORDS}}
+  - Bold and externally link them like:
+    <a href=" external-link " target="_blank"><strong>related keyword</strong></a>
+
+⚠️ RULES:
+- DO NOT invent or alter any ingredients or cooking steps
+- DO NOT include buttons, ratings, markdown, or JSON
+- DO NOT write the meta description
+- DO NOT use any labels like "Part 1" or "Humanized"
+- DO NOT continue beyond the halfway point of the instructions
+
+OUTPUT FORMAT:
+<!-- Use clean HTML: <h1>, <h2>, <h3>, <p>, <br>, etc.
+     No markdown. No JSON. No step numbers. Stop halfway through instructions. -->
+`;
+
+
+const RECIPE_EXPANSION_PROMPT = `You are a professional food blogger and content writer. Continue writing the second half of a long-form, SEO-optimized, emotionally rich recipe blog post using the HTML provided from the first half.
+
+FIRST HALF CONTENT:
+{{FIRST_HALF_CONTENT}}
+
+TASK:
+- Begin exactly where the first half stopped
+- Continue and finish the step-by-step instructions in the same friendly, vivid tone
+- After instructions, include any of the following sections that were not already written:
+  - <h2>Serving Suggestions</h2>
+  - <h2>Flavor Boosts & Fixes</h2>
+  - <h2>Storage & Reheating Tips</h2>
+  - <h2>FAQs</h2>
+  - <h2>Final Thoughts</h2> or <h2>Why I’ll Keep Making This</h2>
+- Conclude with a heartfelt reflection or tip (not a summary)
+- Maintain consistent, sensory-rich, helpful tone
+
+✅ SEO RULES:
+- Reuse the focus keyword: **{{FOCUS_KEYWORD}}** at least once more in a heading or paragraph
+- Internally link the focus keyword like:
+  <a href=" internal-link " target="_blank"><strong>{{FOCUS_KEYWORD}}</strong></a>
+- Optionally include 1–2 related keywords from {{RELATED_KEYWORDS}} if they naturally fit
+  - Bold and externally link them like:
+    <a href=" external-link " target="_blank"><strong>related keyword</strong></a>
+
+✍️ TONE & STRUCTURE:
+- Keep tone warm, sensory, and human — as if written for a home cook
+- Add playful tips, common mistakes, family-style commentary
+- Celebrate imperfections and kitchen personality
+
+📏 LENGTH TARGET:
+- Ensure the full article (Parts 1 and 2) reaches **4,500–5,500 words**
+
+⚠️ RULES:
+- DO NOT repeat intro, ingredient list, or steps from the first half
+- DO NOT invent new instructions or ingredients
+- DO NOT use markdown, JSON, or any “part” labels
+
+OUTPUT FORMAT:
+<!-- Continue in valid HTML only: <h2>, <h3>, <p>, <br>, etc.
+     No markdown. No JSON. No step numbers or extra metadata. -->
+`;
+
+
+
+            // Step 1: Generate first half of blog post
+            const firstHalfPrompt = FIRST_HALF_PROMPT
+                .replace('{{ARTICLE_TO_REWRITE}}', articleToRewrite)
+                .replace('{{RECIPE_TITLE}}', recipeTitle)
+                .replace('{{FOCUS_KEYWORD}}', focusKeyword);
+            const firstHalfContent = await callApiModel(firstHalfPrompt, selectedModel2, apiKeys);
+
+            // --- Extract SEO data from first half content (same logic as recipe flow) ---
+            try {
+              let titles = [];
+              // Try pattern 1: Look for SEO Suggestions section
+              const titlePattern1 = firstHalfContent.match(/SEO Suggestions:[\s\S]*?Title Suggestions:[\s\S]*?((?:^.+$\n?){2,3})/im);
+              if (titlePattern1 && titlePattern1[1]) {
+                titles = titlePattern1[1].trim().split(/\r?\n/).map(t => t.trim()).filter(t => t.length > 0);
+              }
+              // If that fails, try pattern 2: Look for title suggestions anywhere
+              if (titles.length === 0) {
+                const titlePattern2 = firstHalfContent.match(/Title Suggestions:[\s\S]*?((?:^.+$\n?){2,3})/im);
+                if (titlePattern2 && titlePattern2[1]) {
+                  titles = titlePattern2[1].trim().split(/\r?\n/).map(t => t.trim()).filter(t => t.length > 0);
+                }
+              }
+              if (titles.length > 0) {
+                setGeneratedTitles(titles.slice(0, 2).map(text => ({ text, score: Math.floor(Math.random() * 31) + 70 })));
+              } else {
+                const defaultTitles = [
+                  `${recipeTitle}: The Ultimate ${focusKeyword} Recipe`,
+                  `How to Make Perfect ${recipeTitle} | ${focusKeyword} Guide`
+                ];
+                setGeneratedTitles(defaultTitles.map(text => ({ text, score: 85 })));
+              }
+
+              // Meta descriptions
+              let descriptions = [];
+              const descPattern1 = firstHalfContent.match(/Meta Description Suggestions:[\s\S]*?((?:^.+$\n?){2,3})/im);
+              if (descPattern1 && descPattern1[1]) {
+                descriptions = descPattern1[1].trim().split(/\r?\n/).map(d => d.trim()).filter(d => d.length > 0);
+              }
+              if (descriptions.length === 0) {
+                const descPattern2 = firstHalfContent.match(/Meta Description:[\s\S]*?((?:^.+$\n?){1,2})/im);
+                if (descPattern2 && descPattern2[1]) {
+                  const metaDesc = descPattern2[1].trim();
+                  descriptions = [metaDesc, `Discover the best ${focusKeyword} recipe with our step-by-step guide to making ${recipeTitle}. Perfect for any occasion!`];
+                }
+              }
+              if (descriptions.length > 0) {
+                setGeneratedMetaDescriptions(descriptions.slice(0, 2));
+              } else {
+                const defaultDescriptions = [
+                  `Learn how to make delicious ${recipeTitle} with our easy-to-follow recipe. Perfect for ${focusKeyword} lovers!`,
+                  `Discover the secrets to making the best ${recipeTitle}. This ${focusKeyword} recipe is sure to impress family and friends!`
+                ];
+                setGeneratedMetaDescriptions(defaultDescriptions);
+              }
+
+              // Keywords
+              let keywords = [];
+              const keywordPattern1 = firstHalfContent.match(/SEO Keywords:[\s\S]*?((?:[^,\n]+(?:,\s*|$)){5,15})/im);
+              if (keywordPattern1 && keywordPattern1[1]) {
+                keywords = keywordPattern1[1].split(',').map(k => k.trim()).filter(k => k.length > 0);
+              }
+              if (keywords.length === 0) {
+                const keywordPattern2 = firstHalfContent.match(/Primary[\s\S]*?\|[\s\S]*?((?:[^|\n]+(?:\|\s*|$)){1,10})/im);
+                if (keywordPattern2 && keywordPattern2[1]) {
+                  keywords = keywordPattern2[1].split('|').map(k => k.trim()).filter(k => k.length > 0 && !k.includes('---'));
+                }
+              }
+              if (keywords.length === 0) {
+                // Table heuristic
+                const tableLines = firstHalfContent.split(/\r?\n/).filter(line => 
+                  line.includes('|') && !line.includes('---') && line.trim().length > 0
+                );
+                if (tableLines.length > 1) {
+                  const keywordRows = tableLines.slice(1); 
+                  const extractedKeywords = [];
+                  for (const row of keywordRows) {
+                    const parts = row.split('|');
+                    if (parts.length >= 2) {
+                      const rowKeywords = parts[1].trim().split(',').map(k => k.trim());
+                      extractedKeywords.push(...rowKeywords);
+                    }
+                  }
+                  if (extractedKeywords.length > 0) {
+                    keywords = extractedKeywords.filter(k => 
+                      k.length > 0 && 
+                      k.toLowerCase() !== 'keywords' && 
+                      k.toLowerCase() !== 'cluster name'
+                    );
+                  }
+                }
+              }
+              if (keywords.length > 0) {
+                setExtractedKeywords(keywords);
+              } else {
+                const defaultKeywords = [focusKeyword, recipeTitle, `${recipeTitle} recipe`, `how to make ${recipeTitle}`, `best ${focusKeyword} recipe`];
+                setExtractedKeywords(defaultKeywords);
+              }
+              setIsSidebarContentVisible(true);
+            } catch (seoError) {
+              // Fallback if any extraction fails
+              const defaultTitles = [
+                `${recipeTitle}: The Ultimate ${focusKeyword} Recipe`,
+                `How to Make Perfect ${recipeTitle} | ${focusKeyword} Guide`
+              ];
+              setGeneratedTitles(defaultTitles.map(text => ({ text, score: 85 })));
+              const defaultDescriptions = [
+                `Learn how to make delicious ${recipeTitle} with our easy-to-follow recipe. Perfect for ${focusKeyword} lovers!`,
+                `Discover the secrets to making the best ${recipeTitle}. This ${focusKeyword} recipe is sure to impress family and friends!`
+              ];
+              setGeneratedMetaDescriptions(defaultDescriptions);
+              const defaultKeywords = [focusKeyword, recipeTitle, `${recipeTitle} recipe`, `how to make ${recipeTitle}`, `best ${focusKeyword} recipe`];
+              setExtractedKeywords(defaultKeywords);
+              setIsSidebarContentVisible(true);
+            }
+
+            // Step 2: Expansion
+            const expansionPrompt = RECIPE_EXPANSION_PROMPT
+                .replace('{{FIRST_HALF_CONTENT}}', firstHalfContent);
+            const secondHalf = await callApiModel(expansionPrompt, selectedModel2, apiKeys);
+            // Combine and display
+            finalContent = combineContent(firstHalfContent, secondHalf);
+            editor?.commands.setContent(finalContent);
+            editor?.setEditable(true); // Re-enable editing after generation
+            return;
         } else if (difficulty === 'recipe') {
             console.log("Using Recipe Article flow with RECIPE_ARTICLE_FLOW2_PROMPT_TEMPLATE");
             
@@ -882,21 +852,6 @@ New Meta Description:`;
                 if (titlePattern2 && titlePattern2[1]) {
                   titles = titlePattern2[1].trim().split(/\r?\n/).map(t => t.trim()).filter(t => t.length > 0);
                   console.log('Extracted titles using pattern 2:', titles);
-                }
-              }
-              
-              // If that fails, try pattern 3: Look for any lines that look like titles
-              if (titles.length === 0) {
-                // Look for lines that contain the focus keyword and are reasonable title length
-                const potentialTitles = flow1Output.split(/\r?\n/).filter(line => {
-                  return line.toLowerCase().includes(focusKeyword.toLowerCase()) && 
-                         line.length > 20 && line.length < 80 && 
-                         !line.includes(':') && !line.includes('|');
-                }).slice(0, 2);
-                
-                if (potentialTitles.length > 0) {
-                  titles = potentialTitles;
-                  console.log('Extracted titles using pattern 3:', titles);
                 }
               }
               
@@ -1125,55 +1080,6 @@ New Meta Description:`;
         throw new Error('Received empty content from the API. Please try again.');
       }
       
-      // For recipe articles, use Flow 3 to insert external links into the content
-      if (difficulty === 'recipe' && externalLinks.length >= 1) {
-        try {
-          // Update the editor to show we're inserting links
-          editor?.commands.setContent('<p>Inserting external links into the article using Flow 3...</p>');
-          
-          console.log('Using Flow 3 to insert external links:', externalLinks);
-          
-          // Prepare the Flow 3 prompt with the Flow 2 output and external links
-          let flow3Prompt = FLOW3_EXTERNAL_LINK_INSERTION_PROMPT
-            .replace(/{{FLOW2_ARTICLE_CONTENT}}/g, finalContent)
-            .replace(/{{EXTERNAL_LINK_1}}/g, externalLinks[0] || 'https://www.seriouseats.com/cooking-techniques')
-            .replace(/{{EXTERNAL_LINK_2}}/g, externalLinks[1] || externalLinks[0] || 'https://www.foodnetwork.com/recipes');
-          
-          console.log('External links for Flow 3:', 
-            `Link 1: ${externalLinks[0] || 'https://www.seriouseats.com/cooking-techniques'}`, 
-            `Link 2: ${externalLinks[1] || externalLinks[0] || 'https://www.foodnetwork.com/recipes'}`);
-          
-          
-          // Make the API call for Flow 3
-          console.log('Flow 3 Prompt length:', flow3Prompt.length);
-          const flow3Output = await callApiModel(flow3Prompt, selectedModel2, apiKeys);
-          
-          // Update the content with the Flow 3 output
-          finalContent = flow3Output;
-          console.log('External links inserted successfully via Flow 3');
-        } catch (linkError) {
-          console.error('Error in Flow 3 external link insertion:', linkError);
-          // If Flow 3 fails, fall back to direct insertion method
-          try {
-            console.log('Falling back to direct link insertion method');
-            // Set the content first
-            editor?.commands.setContent(finalContent);
-            
-            // Then insert the links directly into the editor
-            await insertExternalLinksIntoEditor(editor, externalLinks);
-            
-            // Get the updated content with links
-            finalContent = editor?.getHTML() || finalContent;
-            console.log('External links inserted successfully via fallback method');
-          } catch (fallbackError) {
-            console.error('Error in fallback link insertion:', fallbackError);
-            // Continue with the original content if both methods fail
-            editor?.commands.setContent(finalContent);
-            console.log('Continuing with original content due to link insertion errors');
-          }
-        }
-      }
-      
       editor?.commands.setContent(finalContent); // Set final HTML content
 
       editor?.setEditable(true); // Re-enable editing
@@ -1194,6 +1100,13 @@ New Meta Description:`;
       editor?.setEditable(true); // Re-enable editing even on error
     } finally {
       setIsLoading(false); // Always ensure loading state is reset
+      
+      // Auto-trigger the Generate Recipe Image button after a short delay
+      setTimeout(() => {
+        generateImage().catch(error => {
+          console.error('Error auto-generating recipe image:', error);
+        });
+      }, 7);
     }
   };
 
@@ -1216,7 +1129,7 @@ New Meta Description:`;
         model: modelId, // Pass the selected model ID to OpenRouter
         messages: [{ role: 'user', content: prompt }],
         // For DeepSeek models, we'll set a higher max_tokens to ensure we get a complete response
-        ...(isDeepSeekModel ? { max_tokens: 4000 } : {}),
+        ...(isDeepSeekModel ? { max_tokens: 2000 } : {}),
         // Optional: Add site/header info as recommended by OpenRouter
         // route: "fallback", // Example routing
         // headers: {
@@ -1270,6 +1183,30 @@ New Meta Description:`;
     }
   };
 
+  // Auto-trigger WebP compression after image is generated
+  useEffect(() => {
+    if (
+      generatedImageUrl &&
+      !isGeneratingImage &&
+      !isConverting &&
+      !isWebP &&
+      !isImageWebP(generatedImageUrl)
+    ) {
+      console.log('Auto-triggering WebP compression...');
+      
+      // Small delay to ensure UI is ready
+      const timer = setTimeout(() => {
+        if (!isConverting) {  // Double-check we're not already converting
+          convertToWebP().catch(error => {
+            console.error('Error during auto-conversion to WebP:', error);
+          });
+        }
+      }, 300);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [generatedImageUrl, isGeneratingImage, isConverting, isWebP]);
+
   // Function to generate an image based on the recipe title
   const generateImage = async () => {
     if (!recipeTitle) {
@@ -1309,6 +1246,7 @@ New Meta Description:`;
       if (imageUrl) {
         setGeneratedImageUrl(imageUrl);
         setOriginalImageUrl(imageUrl); // Store the original image URL
+        setIsWebP(false); // Reset WebP flag for new image
       } else {
         throw new Error('Failed to generate image: No URL returned');
       }
@@ -1325,43 +1263,27 @@ New Meta Description:`;
     }
   };
 
-  // Function to convert image to WebP format with animation
+  // Function to convert image to WebP format
   const convertToWebP = async () => {
     if (!generatedImageUrl) {
       setImageGenerationError('No image available to convert');
       return;
     }
     
+    // Check if image is already in WebP format
+    if (isImageWebP(generatedImageUrl)) {
+      console.log('Image already WebP; skipping conversion');
+      setIsWebP(true);
+      return;
+    }
+    
     setIsConverting(true);
-    setConversionProgress(0);
     setImageGenerationError(null);
     
     try {
       // Store original image URL if not already stored
       if (!originalImageUrl) {
         setOriginalImageUrl(generatedImageUrl);
-      }
-      
-      // Simulate the conversion process with steps and progress
-      const steps = [
-        'test data',
-        'run iscript compressing',
-        'run method compress hard',
-        'convert to webp'
-      ];
-      
-      // Animate through each step
-      for (let i = 0; i < steps.length; i++) {
-        setConversionStep(steps[i]);
-        
-        // Update progress for each step (25%, 50%, 75%, 100%)
-        for (let p = 0; p < 100; p += 5) {
-          setConversionProgress((i * 25) + (p / 4));
-          await new Promise(resolve => setTimeout(resolve, 50)); // Delay for animation
-        }
-        
-        // Pause briefly at the end of each step
-        await new Promise(resolve => setTimeout(resolve, 300));
       }
       
       let webpImage: string;
@@ -1378,7 +1300,7 @@ New Meta Description:`;
           timeout: 10000 // 10 second timeout
         });
         
-        if (response.data && response.data.success && response.data.webpImage) {
+        if (response.data?.success && response.data.webpImage) {
           console.log('Server-side conversion successful');
           webpImage = response.data.webpImage;
         } else {
@@ -1396,6 +1318,7 @@ New Meta Description:`;
       
       // Update the image URL with the converted WebP image
       setGeneratedImageUrl(webpImage);
+      setIsWebP(true);
       
     } catch (error) {
       console.error('Error in convertToWebP:', error);
@@ -1408,6 +1331,7 @@ New Meta Description:`;
         errorMessage = `${errorMessage}: ${error.response.data?.error || error.message}`;
       }
       setImageGenerationError(errorMessage);
+      setIsWebP(false);
       
       // Restore original image if conversion fails
       if (originalImageUrl) {
@@ -1415,88 +1339,14 @@ New Meta Description:`;
       }
     } finally {
       setIsConverting(false);
-      setConversionStep('');
-      setConversionProgress(0);
     }
   };
-  
-  // Function to handle WebP compression for blog images
-  const handleCompressWebP = async (imageUrl: string, imageType: string) => {
-    if (!imageUrl) {
-      setBlogImageError('No image available to convert');
-      return;
-    }
-    
-    // Set the specific image as converting
-    setConvertingBlogImages(prev => ({
-      ...prev,
-      [imageType]: true
-    }));
-    
-    setBlogImageError(null);
-    setSuccessMessage(null);
-    
-    try {
-      // Store original image URL for backup
-      const originalImages = {...blogImages};
-      
-      let webpImage: string;
-      
-      try {
-        // First try the server-side approach
-        console.log(`Attempting server-side conversion for ${imageType} image...`);
-        const response = await axios.post('http://localhost:3001/convert-base64', {
-          imageData: imageUrl
-        }, {
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          timeout: 10000 // 10 second timeout
-        });
-        
-        if (response.data && response.data.success && response.data.webpImage) {
-          console.log(`Server-side conversion successful for ${imageType} image`);
-          webpImage = response.data.webpImage;
-        } else {
-          throw new Error('Invalid response from conversion server');
-        }
-      } catch (serverError) {
-        // If server approach fails, fall back to browser-based conversion
-        console.log(`Server-side conversion failed for ${imageType} image, falling back to browser-based conversion`, serverError);
-        
-        // Import the browser-based converter
-        const browserConverter = await import('./browser-webp-converter');
-        webpImage = await browserConverter.processImage(imageUrl);
-        console.log(`Browser-based conversion successful for ${imageType} image`);
-      }
-      
-      // Update the specific blog image with the converted WebP image
-      setBlogImages(prev => ({
-        ...prev,
-        [imageType]: webpImage
-      }));
-      
-      setSuccessMessage(`${imageType.charAt(0).toUpperCase() + imageType.slice(1)} image converted to WebP successfully!`);
-      
-    } catch (error) {
-      console.error(`Error converting ${imageType} image to WebP:`, error);
-      
-      // Show a more detailed error message
-      let errorMessage = `Failed to convert ${imageType} image to WebP`;
-      if (error instanceof Error) {
-        errorMessage = `${errorMessage}: ${error.message}`;
-      } else if (axios.isAxiosError(error) && error.response) {
-        errorMessage = `${errorMessage}: ${error.response.data?.error || error.message}`;
-      }
-      setBlogImageError(errorMessage);
-      
-    } finally {
-      // Clear the converting state for this image
-      setConvertingBlogImages(prev => ({
-        ...prev,
-        [imageType]: false
-      }));
-    }
+
+  // Function to check if an image is already in WebP format
+  const isImageWebP = (imageUrl: string): boolean => {
+    return imageUrl.startsWith('data:image/webp') || 
+           imageUrl.includes('webp') ||
+           (imageUrl.includes('data:image/') && !imageUrl.includes('data:image/jpg') && !imageUrl.includes('data:image/jpeg') && !imageUrl.includes('data:image/png'));
   };
 
   // Function to handle WordPress settings changes
@@ -1750,7 +1600,40 @@ New Meta Description:`;
             
           // Create form data for image upload
           const formData = new FormData();
-          formData.append('file', imageBlob, `${slug || 'recipe'}-image.png`);
+          
+          // Generate a clean filename from the post title
+          const cleanTitle = recipeTitle 
+            ? recipeTitle.toLowerCase()
+                .replace(/[^a-z0-9]+/g, '-')
+                .replace(/^-+|-+$/g, '')
+            : 'recipe';
+          const filename = `${cleanTitle}-image.png`;
+          
+          formData.append('file', imageBlob, filename);
+
+          // Generate image title from recipe title
+          let imageTitle = recipeTitle || 'Recipe Image';
+          try {
+            const titlePrompt = IMAGE_TITLE_PROMPT.replace('{recipeTitle}', recipeTitle || 'Recipe');
+            const titleResponse = await callApiModel(titlePrompt, selectedModel1, apiKeys);
+            
+            if (titleResponse) {
+              // Clean up the response to get just the title
+              const titleMatch = titleResponse.match(/^[^\n]+/);
+              if (titleMatch) {
+                imageTitle = titleMatch[0].trim();
+                // Ensure it's not too long (max 70 chars)
+                if (imageTitle.length > 70) {
+                  imageTitle = imageTitle.substring(0, 67) + '...';
+                }
+              }
+            }
+          } catch (titleError) {
+            console.error('Failed to generate image title:', titleError);
+          }
+
+          // Set the title in the form data
+          formData.append('title', imageTitle);
 
           // Use alt text from blog image generation if available, otherwise generate new one
           let altText = '';
@@ -1761,9 +1644,34 @@ New Meta Description:`;
               console.log('Using pre-generated alt text for featured image');
             } else {
               // If not, generate a new one using the shared prompt template
-              const altTextPrompt = SHARED_ALT_TEXT_PROMPT.replace('{focusKeyword}', focusKeyword);
+              const keyword = focusKeyword && typeof focusKeyword === 'object' && 'value' in focusKeyword 
+                 ? focusKeyword.value 
+                 : String(focusKeyword || '');
+              const altTextPrompt = SHARED_ALT_TEXT_PROMPT.replace('{focusKeyword}', keyword);
               // Use the same model and API key as for image prompts
-              altText = await callApiModel(altTextPrompt, selectedModel1, apiKeys);
+              let generatedText = await callApiModel(altTextPrompt, selectedModel1, apiKeys);
+              
+              // Clean up the response to extract just the alt text if it contains additional formatting
+              if (generatedText) {
+                // If the response contains "Alt Text:" followed by quoted text, extract just that part
+                const altTextMatch = generatedText.match(/Alt Text:[\s\n]*"(.*?)"/i) || 
+                                    generatedText.match(/Alt Text:[\s\n]*(.*?)(?:\n|$)/i);
+                
+                if (altTextMatch && altTextMatch[1]) {
+                  // Remove any remaining quotes and trim
+                  altText = altTextMatch[1].replace(/^\"|\"$/g, '').trim();
+                } else {
+                  // If no specific format found, try to get the first quoted text or first line
+                  const firstQuoteMatch = generatedText.match(/\"(.*?)\"/);
+                  altText = firstQuoteMatch ? firstQuoteMatch[1] : generatedText.split('\n')[0];
+                  
+                  // Ensure it's not too long (max 125 chars)
+                  if (altText.length > 125) {
+                    altText = altText.substring(0, 122) + '...';
+                  }
+                }
+              }
+              
               console.log('Generated new alt text for featured image');
             }
             
@@ -1876,6 +1784,34 @@ New Meta Description:`;
   // State to track which blog images are being converted
   const [convertingBlogImages, setConvertingBlogImages] = useState<{[key: string]: boolean}>({});
 
+  // Helper function to convert image to WebP
+  const convertImageToWebP = async (imageUrl: string): Promise<string> => {
+    try {
+      // First try the server-side approach
+      console.log('Attempting server-side conversion...');
+      const response = await axios.post('http://localhost:3001/convert-base64', {
+        imageData: imageUrl
+      }, {
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        timeout: 10000 // 10 second timeout
+      });
+      
+      if (response.data?.success && response.data.webpImage) {
+        console.log('Server-side conversion successful');
+        return response.data.webpImage;
+      }
+      throw new Error('Invalid response from conversion server');
+    } catch (serverError) {
+      console.log('Server-side conversion failed, falling back to browser-based conversion', serverError);
+      
+      // Fall back to browser-based conversion
+      const browserConverter = await import('./browser-webp-converter');
+      return await browserConverter.processImage(imageUrl);
+    }
+  };
+
   // Function to handle blog image generation
   const handleGenerateBlogImages = async () => {
     if (!editor || !editor.getHTML()) {
@@ -1896,7 +1832,7 @@ New Meta Description:`;
     
     setIsGeneratingBlogImages(true);
     setBlogImageError(null);
-    setSuccessMessage(null);
+    setSuccessMessage('Starting image generation...');
     setBlogImages({});
     
     try {
@@ -1904,6 +1840,7 @@ New Meta Description:`;
       const articleContent = editor.getHTML();
       
       // Generate image prompts
+      setSuccessMessage('Generating image prompts...');
       const imagePrompts = await generateImagePrompts(
         articleContent,
         selectedModel1,
@@ -1914,63 +1851,74 @@ New Meta Description:`;
       
       // Generate images for each section
       const images: {[key: string]: string} = {};
+      const webpImages: {[key: string]: string} = {};
       const altTexts: {[key: string]: string} = {};
       let imagesGenerated = 0;
       
-      // Generate intro image
-      console.log('Generating intro image...');
-      try {
-        images.intro = await generateAIImage(
-          imagePrompts.intro_image_prompt, 
-          { service: selectedImageService as 'stability' | 'leonardo' }
-        );
-        altTexts.intro = imagePrompts.intro_image_alt_text || '';
-        imagesGenerated++;
-        console.log('Intro image URL:', images.intro);
-      } catch (error) {
-        console.error('Failed to generate intro image:', error);
-      }
+      // Function to process a single image
+      const processImage = async (type: string, prompt: string, altText: string) => {
+        try {
+          setSuccessMessage(`Generating ${type} image...`);
+          // Generate the original image
+          const imageUrl = await generateAIImage(
+            prompt,
+            { service: selectedImageService as 'stability' | 'leonardo' }
+          );
+          
+          if (!imageUrl) throw new Error('No image URL returned');
+          
+          // Store the original image
+          images[type] = imageUrl;
+          altTexts[type] = altText;
+          
+          // Update the UI with the original image
+          setBlogImages(prev => ({
+            ...prev,
+            [type]: imageUrl
+          }));
+          
+          // Convert to WebP
+          setSuccessMessage(`Converting ${type} image to WebP...`);
+          const webpUrl = await convertImageToWebP(imageUrl);
+          
+          // Store the WebP version
+          webpImages[type] = webpUrl;
+          
+          // Update the UI with the WebP version
+          setBlogImages(prev => ({
+            ...prev,
+            [type]: webpUrl
+          }));
+          
+          imagesGenerated++;
+          setSuccessMessage(`Successfully generated and converted ${type} image (${imagesGenerated}/3)`);
+          
+          return true;
+        } catch (error) {
+          console.error(`Failed to process ${type} image:`, error);
+          setBlogImageError(`Failed to process ${type} image: ${error instanceof Error ? error.message : 'Unknown error'}`);
+          return false;
+        }
+      };
       
-      // Generate ingredients image
-      console.log('Generating ingredients image...');
-      try {
-        images.ingredients = await generateAIImage(
-          imagePrompts.ingredients_image_prompt, 
-          { service: selectedImageService as 'stability' | 'leonardo' }
-        );
-        altTexts.ingredients = imagePrompts.ingredients_image_alt_text || '';
-        imagesGenerated++;
-        console.log('Ingredients image URL:', images.ingredients);
-      } catch (error) {
-        console.error('Failed to generate ingredients image:', error);
-      }
+      // Process all images in sequence
+      await processImage('intro', imagePrompts.intro_image_prompt, imagePrompts.intro_image_alt_text || '');
+      await processImage('ingredients', imagePrompts.ingredients_image_prompt, imagePrompts.ingredients_image_alt_text || '');
+      await processImage('recipe', imagePrompts.final_recipe_image_prompt, imagePrompts.final_recipe_image_alt_text || '');
       
-      // Generate final recipe image
-      console.log('Generating recipe image...');
-      try {
-        images.recipe = await generateAIImage(
-          imagePrompts.final_recipe_image_prompt, 
-          { service: selectedImageService as 'stability' | 'leonardo' }
-        );
-        altTexts.recipe = imagePrompts.final_recipe_image_alt_text || '';
-        imagesGenerated++;
-        console.log('Recipe image URL:', images.recipe);
-      } catch (error) {
-        console.error('Failed to generate recipe image:', error);
-      }
-      
-      // Store the generated images and alt texts in state
+      // Store all the final WebP images and alt texts
       if (imagesGenerated > 0) {
-        setBlogImages(images);
+        setBlogImages(webpImages);
         setBlogImageAltTexts(altTexts);
-        setSuccessMessage(`${imagesGenerated} images generated. Click "Insert Images" to add them to your blog post.`);
+        setSuccessMessage(`Successfully generated and converted ${imagesGenerated} images to WebP.`);
       } else {
         throw new Error('Failed to generate any images');
       }
     } catch (error) {
-      console.error('Failed to generate blog images:', error);
-      setBlogImageError(error instanceof Error ? error.message : 'Failed to generate blog images');
+      console.error('Error generating blog post:', error);
+      setError(error instanceof Error ? error.message : 'An error occurred while generating the blog post');
     } finally {
+      // Always clear the image-generation loading state, regardless of success or failure
       setIsGeneratingBlogImages(false);
     }
   };
@@ -2250,6 +2198,37 @@ New Meta Description:`;
               </div>
             </div>
 
+            {difficulty === 'hard' && (
+              <div className="input-row">
+                <div className="input-group" style={{ width: '100%' }}>
+                  <label htmlFor="articleToRewrite">Article to Rewrite:</label>
+                  <textarea
+                    id="articleToRewrite"
+                    value={articleToRewrite}
+                    onChange={(e) => setArticleToRewrite(e.target.value)}
+                    placeholder="Paste the whole article here"
+                    rows={6}
+                    style={{ minHeight: '100px', width: '100%' }}
+                  />
+                </div>
+              </div>
+            )}
+            {difficulty === 'high' && (
+              <div className="input-row">
+                <div className="input-group" style={{ width: '100%' }}>
+                  <label htmlFor="articleToRewriteHigh">Enter recipe info:</label>
+                  <textarea
+                    id="articleToRewriteHigh"
+                    value={articleToRewrite}
+                    onChange={(e) => setArticleToRewrite(e.target.value)}
+                    placeholder="Enter recipe info"
+                    rows={6}
+                    style={{ minHeight: '100px', width: '100%' }}
+                  />
+                </div>
+              </div>
+            )}
+
             <div className="button-group">
               <button 
                 className="generate-button"
@@ -2260,28 +2239,17 @@ New Meta Description:`;
               </button>
               
               <button 
-                className="generate-images-button generate-button"
+                className="generate-images-button"
                 onClick={handleGenerateBlogImages} 
                 disabled={isGeneratingBlogImages || isLoading || !editor || !(editor.getHTML().length > 100)}
-                style={{ marginLeft: '10px', backgroundColor: '#4a7c59' }}
               >
                 {isGeneratingBlogImages ? 'Generating Images...' : 'Generate Blog Images'}
               </button>
-              
-              {false && (
-  <button 
-    className="external-link-button generate-button"
-    onClick={handleInsertExternalLinks} 
-    disabled={isInsertingLinks || isLoading || !editor || !(editor.getHTML().length > 100)}
-    style={{ marginLeft: '10px', backgroundColor: '#4a7c59' }}
-  >
-    {isInsertingLinks ? 'Inserting Links...' : 'Add External Links'}
-  </button>
-) }
-              
+            </div>
+
+            {/* Image Generation Section */}
+            <div className="button-group">
               <div className="image-generation-section">
-                
-                
                 {Object.keys(blogImages).length > 0 && (
                   <button 
                     className="insert-images-button"
@@ -2297,44 +2265,71 @@ New Meta Description:`;
                     <h3>Generated Blog Images</h3>
                     <div className="image-grid">
                       {blogImages.intro && (
-  <div className="image-preview-item">
-    <h4>Intro Image</h4>
-    <img src={blogImages.intro} alt="Intro" className="preview-image" />
-    <button 
-      className="compress-webp-button" 
-      onClick={() => handleCompressWebP(blogImages.intro, 'intro')}
-      disabled={convertingBlogImages.intro}
-    >
-      {convertingBlogImages.intro ? 'Converting...' : 'Compress WebP'}
-    </button>
-  </div>
-)}
+                        <div className="image-preview-item">
+                          <h4>Intro Image</h4>
+                          <img src={blogImages.intro} alt="Intro" className="preview-image" />
+                          <button 
+                            className="compress-webp-button" 
+                            onClick={() => handleCompressWebP(blogImages.intro, 'intro')}
+                            disabled={convertingBlogImages.intro}
+                            style={{
+                              marginTop: '10px',
+                              padding: '8px 16px',
+                              backgroundColor: convertingBlogImages.intro ? '#6c757d' : '#4CAF50',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: '4px',
+                              cursor: convertingBlogImages.intro ? 'not-allowed' : 'pointer'
+                            }}
+                          >
+                            {convertingBlogImages.intro ? 'Converting...' : 'Compress WebP'}
+                          </button>
+                        </div>
+                      )}
                       {blogImages.ingredients && (
-  <div className="image-preview-item">
-    <h4>Ingredients Image</h4>
-    <img src={blogImages.ingredients} alt="Ingredients" className="preview-image" />
-    <button 
-      className="compress-webp-button" 
-      onClick={() => handleCompressWebP(blogImages.ingredients, 'ingredients')}
-      disabled={convertingBlogImages.ingredients}
-    >
-      {convertingBlogImages.ingredients ? 'Converting...' : 'Compress WebP'}
-    </button>
-  </div>
-)}
+                        <div className="image-preview-item">
+                          <h4>Ingredients Image</h4>
+                          <img src={blogImages.ingredients} alt="Ingredients" className="preview-image" />
+                          <button 
+                            className="compress-webp-button" 
+                            onClick={() => handleCompressWebP(blogImages.ingredients, 'ingredients')}
+                            disabled={convertingBlogImages.ingredients}
+                            style={{
+                              marginTop: '10px',
+                              padding: '8px 16px',
+                              backgroundColor: convertingBlogImages.ingredients ? '#6c757d' : '#4CAF50',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: '4px',
+                              cursor: convertingBlogImages.ingredients ? 'not-allowed' : 'pointer'
+                            }}
+                          >
+                            {convertingBlogImages.ingredients ? 'Converting...' : 'Compress WebP'}
+                          </button>
+                        </div>
+                      )}
                       {blogImages.recipe && (
-  <div className="image-preview-item">
-    <h4>Recipe Image</h4>
-    <img src={blogImages.recipe} alt="Final Dish" className="preview-image" />
-    <button 
-      className="compress-webp-button" 
-      onClick={() => handleCompressWebP(blogImages.recipe, 'recipe')}
-      disabled={convertingBlogImages.recipe}
-    >
-      {convertingBlogImages.recipe ? 'Converting...' : 'Compress WebP'}
-    </button>
-  </div>
-)}
+                        <div className="image-preview-item">
+                          <h4>Recipe Image</h4>
+                          <img src={blogImages.recipe} alt="Final Dish" className="preview-image" />
+                          <button 
+                            className="compress-webp-button" 
+                            onClick={() => handleCompressWebP(blogImages.recipe, 'recipe')}
+                            disabled={convertingBlogImages.recipe}
+                            style={{
+                              marginTop: '10px',
+                              padding: '8px 16px',
+                              backgroundColor: convertingBlogImages.recipe ? '#6c757d' : '#4CAF50',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: '4px',
+                              cursor: convertingBlogImages.recipe ? 'not-allowed' : 'pointer'
+                            }}
+                          >
+                            {convertingBlogImages.recipe ? 'Converting...' : 'Compress WebP'}
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -2657,31 +2652,23 @@ New Meta Description:`;
                   {(generatedImageUrl || imageGenerationError || isConverting) && (
                     <div className="image-result-container">
                       {isConverting ? (
-                        <div className="conversion-animation" style={{ backgroundColor: 'black', padding: '20px', borderRadius: '5px' }}>
-                          <div className="conversion-text" style={{ 
-                            color: '#00ff00', 
-                            fontFamily: 'Verdana, sans-serif',
-                            marginBottom: '15px',
-                            minHeight: '100px',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            justifyContent: 'center'
-                          }}>
-                            <p style={{ margin: '5px 0' }}>{conversionStep}</p>
+                        <div className="conversion-animation" style={{ padding: '10px 0' }}>
+                          <div className="conversion-text">
+                            <p style={{ margin: '5px 0', color: '#4a4a4a' }}>{conversionStep}</p>
                           </div>
                           <div className="progress-container" style={{ 
                             width: '100%', 
-                            height: '20px', 
-                            backgroundColor: '#333',
-                            borderRadius: '3px',
+                            height: '8px',
+                            marginTop: '10px',
+                            backgroundColor: '#f0f0f0',
+                            borderRadius: '4px',
                             overflow: 'hidden'
                           }}>
                             <div className="progress-bar" style={{ 
                               width: `${conversionProgress}%`, 
                               height: '100%', 
-                              backgroundColor: '#00ff00',
-                              backgroundImage: 'linear-gradient(45deg, rgba(0,0,0,0.1) 25%, transparent 25%, transparent 50%, rgba(0,0,0,0.1) 50%, rgba(0,0,0,0.1) 75%, transparent 75%, transparent)',
-                              backgroundSize: '20px 20px'
+                              backgroundColor: '#4CAF50',
+                              transition: 'width 0.3s ease'
                             }}></div>
                           </div>
                         </div>
@@ -2697,11 +2684,11 @@ New Meta Description:`;
                                 style={{
                                   marginTop: '10px',
                                   padding: '8px 16px',
-                                  backgroundColor: '#4CAF50',
+                                  backgroundColor: isConverting ? '#6c757d' : '#4CAF50',
                                   color: 'white',
                                   border: 'none',
                                   borderRadius: '4px',
-                                  cursor: 'pointer'
+                                  cursor: isConverting ? 'not-allowed' : 'pointer'
                                 }}
                               >
                                 Compress WebP
@@ -3086,6 +3073,23 @@ const insertExternalLinksIntoEditor = async (editor: any, links: string[]) => {
           `<a href="${links.length >= 2 ? links[1] : links[0]}" target="_blank" rel="noopener">${anchorText}</a>`
         );
         
+// Helper to combine two HTML/XML blocks
+function combineContent(first: string, second: string): string {
+    // Clean up the content by removing any part headers
+    const cleanFirst = first
+        .replace(/<h2[^>]*>Part 1: [^<]*<\/h2>/i, '')
+        .replace(/<h2[^>]*>Part 1[^<]*<\/h2>/i, '')
+        .trim();
+    
+    const cleanSecond = second
+        .replace(/<h2[^>]*>Part 2: [^<]*<\/h2>/i, '')
+        .replace(/<h2[^>]*>Part 2[^<]*<\/h2>/i, '')
+        .trim();
+
+    // Combine the parts with a simple separator
+    return `${cleanFirst}\n\n${cleanSecond}`;
+}
+
         // Replace the paragraph in the editor
         editor.commands.setContent(
           editor.getHTML().replace(secondLinkTarget, `<p>${newText}</p>`)
@@ -3098,6 +3102,26 @@ const insertExternalLinksIntoEditor = async (editor: any, links: string[]) => {
     console.error('Error inserting links into editor:', error);
     throw error;
   }
+}
+
+// Helper to extract XML/HTML blocks by tag name
+function extractXML(text: string, tag: string): string {
+    const regex = new RegExp(`<${tag}[^>]*>([\s\S]*?)<\/${tag}>`, 'i');
+    const match = text.match(regex);
+    return match ? match[1].trim() : '';
+}
+
+// Helper to combine two HTML/XML blocks
+function combineContent(first: string, second: string): string {
+    // Wrap both parts in a container to ensure TipTap renders both
+    return `<div class="blog-part1">
+
+${first}
+</div>
+<div class="blog-part2">
+
+${second}
+</div>`;
 }
 
 export default App;

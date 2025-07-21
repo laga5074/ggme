@@ -6,6 +6,7 @@ const sharp = require('sharp');
 const fs = require('fs');
 const path = require('path');
 const { Buffer } = require('buffer');
+const { v4: uuidv4 } = require('uuid');
 
 const app = express();
 const port = 3001;
@@ -20,10 +21,12 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
 });
 
-// Create uploads directory if it doesn't exist
-const uploadsDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
+// Configure where to store converted images
+const OUTPUT_DIR = path.join(__dirname, '..', 'public', 'converted-images');
+
+// Create output directory if it doesn't exist
+if (!fs.existsSync(OUTPUT_DIR)) {
+  fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 }
 
 // Endpoint to convert base64 image to WebP
@@ -73,47 +76,36 @@ app.post('/convert-base64', express.json({ limit: '10mb' }), async (req, res) =>
 app.post('/convert-file', upload.single('image'), async (req, res) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ error: 'No file uploaded' });
+      return res.status(400).json({ error: 'No image file provided' });
     }
-    
+
     // Generate unique filename
-    const timestamp = Date.now();
-    const originalName = path.parse(req.file.originalname).name;
-    const jpgFilename = `${originalName}-${timestamp}.jpg`;
-    const webpFilename = `${originalName}-${timestamp}.webp`;
-    const jpgPath = path.join(uploadsDir, jpgFilename);
-    const webpPath = path.join(uploadsDir, webpFilename);
-    
-    // Convert to JPG and remove metadata
+    const filename = `${uuidv4()}.webp`;
+    const outputPath = path.join(OUTPUT_DIR, filename);
+
+    // Convert to WebP with quality optimization
     await sharp(req.file.buffer)
-      .jpeg({ quality: 90 })
-      .toFile(jpgPath);
-    
-    // Convert to WebP
-    await sharp(jpgPath)
       .webp({ 
-        quality: 85,
+        quality: 80,
+        alphaQuality: 80,
         lossless: false,
-        nearLossless: false,
-        smartSubsample: true,
-        effort: 5
+        nearLossless: true
       })
-      .toFile(webpPath);
-    
-    // Return paths to both files
-    res.json({ 
-      success: true, 
-      jpgPath: `/uploads/${jpgFilename}`,
-      webpPath: `/uploads/${webpFilename}`
+      .toFile(outputPath);
+
+    // Return URL to the converted image
+    res.json({
+      url: `/converted-images/${filename}`
     });
+
   } catch (error) {
-    console.error('Error converting file:', error);
-    res.status(500).json({ error: `File conversion failed: ${error.message}` });
+    console.error('Image conversion error:', error);
+    res.status(500).json({ error: 'Failed to convert image' });
   }
 });
 
 // Serve static files from uploads directory
-app.use('/uploads', express.static(uploadsDir));
+app.use('/converted-images', express.static(OUTPUT_DIR));
 
 // Start the server
 app.listen(port, () => {
